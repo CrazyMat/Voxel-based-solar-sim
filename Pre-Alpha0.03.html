@@ -149,6 +149,18 @@
                 <span>ATMOSPHERE DENSITY</span>
                 <input type="number" id="cfg-atmo" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" step="0.1" value="0.5">
             </div>
+            <div class="flex justify-between items-center">
+                <span>GRAVITY (G CONST)</span>
+                <input type="number" id="cfg-grav" class="bg-gray-900 border border-gray-700 text-white p-1 w-24 text-right" step="0.0001" value="0.006674">
+            </div>
+            <div class="flex justify-between items-center">
+                <span>SOLAR MASS</span>
+                <input type="number" id="cfg-sun-mass" class="bg-gray-900 border border-gray-700 text-white p-1 w-24 text-right" step="10000" value="860000000">
+            </div>
+            <div class="flex justify-between items-center">
+                <span>DARK ENERGY TERM</span>
+                <input type="number" id="cfg-dark" class="bg-gray-900 border border-gray-700 text-white p-1 w-24 text-right" step="0.000001" value="0.000001">
+            </div>
             
             <button id="apply-config" class="mt-4 w-full bg-cyan-900 hover:bg-cyan-700 text-white py-2 rounded border border-cyan-600 font-bold tracking-wider transition">RE-GENERATE SIMULATION</button>
             <p class="text-[10px] text-gray-500 mt-2 text-center">WARNING: High values may crash the browser.</p>
@@ -192,6 +204,7 @@
                     <div><span class="voxel-stat">TECTONICS:</span> <br><span id="stat-tect" class="voxel-val">STABLE</span></div>
                     <div><span class="voxel-stat">MAGMA FLOW:</span> <br><span id="stat-magma" class="voxel-val">ACTIVE</span></div>
                     <div><span class="voxel-stat">AVG TEMP:</span> <br><span id="stat-temp" class="voxel-val">14.9°C</span></div>
+                    <div><span class="voxel-stat">ORBIT SPD:</span> <br><span id="stat-orbit" class="voxel-val">0.0 u/s</span></div>
                     <div class="col-span-2 mt-1 pt-2 border-t border-gray-800">
                         <span class="voxel-stat">POPULATION:</span> <span class="voxel-val text-gray-500">0 (UNINHABITED)</span>
                     </div>
@@ -275,7 +288,11 @@
             WATER_LEVEL: 0.15,
             ATMO_DENSITY: 0.5,
             SUN_DIST: 400,
-            SUN_RADIUS: 45
+            SUN_RADIUS: 45,
+            GRAV_CONST: 6.674e-3, // Scaled gravitational constant for simulation units
+            SUN_MASS: 8.6e8, // Tuned to keep stable orbit periods near previous behavior
+            EARTH_MASS: 5.9e6,
+            DARK_ENERGY: 1e-6 // Outward acceleration term to tune long-term orbital drift
         };
 
         // Current active config
@@ -291,6 +308,12 @@
             resScale: 1.0,
             isGenerating: false,
             viewMode: 0 // 0: Earth, 1: Sun, 2: System
+        };
+
+        // Orbital state for Earth (position/velocity in sim units)
+        const orbitalState = {
+            position: new THREE.Vector3(),
+            velocity: new THREE.Vector3()
         };
         
         // Optimize: Do not check slice logic every frame if not active
@@ -414,6 +437,23 @@
             return simplex.noise3d(x * scale, y * scale, z * scale);
         }
 
+        function gravitationalMu() {
+            return CONFIG.GRAV_CONST * CONFIG.SUN_MASS;
+        }
+
+        function initializeOrbit() {
+            orbitalState.position.set(CONFIG.SUN_DIST, 0, 0);
+
+            // Near-circular orbital velocity with a slight inclination component
+            const mu = gravitationalMu();
+            const circularVel = Math.sqrt(mu / CONFIG.SUN_DIST);
+            const inclinationFactor = 0.05;
+            const tangentialVel = circularVel * Math.sqrt(1 - inclinationFactor * inclinationFactor);
+
+            orbitalState.velocity.set(0, circularVel * inclinationFactor, tangentialVel);
+            earthGroup.position.copy(orbitalState.position);
+        }
+
         function clearWorld() {
             // Helper to dispose a mesh or group of meshes
             const cleanup = (obj) => {
@@ -466,11 +506,15 @@
             
             log(`INITIALIZING SYSTEM...`);
             log(`EARTH R=${R}, SUN R=${CONFIG.SUN_RADIUS}`);
+            log(`ORBIT MU=${gravitationalMu().toExponential(3)} | DARK ENERGY=${CONFIG.DARK_ENERGY}`);
 
             if(boxGeometry) boxGeometry.dispose();
             boxGeometry = new THREE.BoxGeometry(V_SIZE, V_SIZE, V_SIZE);
 
             clearWorld();
+
+            // Reset orbital state with new parameters
+            initializeOrbit();
 
             // Temporary structures for generation
             const tempVoxels = []; // All generated voxels
@@ -769,7 +813,7 @@
             voxelData.sun = lists.sun;
 
             // Set initial orbit position
-            earthGroup.position.set(CONFIG.SUN_DIST, 0, 0);
+            earthGroup.position.copy(orbitalState.position);
             
             const totalVoxels = voxelData.core.length + voxelData.mantle.length + voxelData.crust.length + voxelData.atmosphere.length + voxelData.sun.length;
             const visibleVoxels = lists.core.surface.length + lists.mantle.surface.length + lists.crust.surface.length + lists.atmosphere.length + lists.sun.length;
@@ -794,11 +838,18 @@
             const time = state.tick;
 
             // Orbital Mechanics
-            // 1. Earth Orbit around Sun
-            const orbitSpeed = 0.005;
-            const angle = time * orbitSpeed;
-            earthGroup.position.x = Math.cos(angle) * CONFIG.SUN_DIST;
-            earthGroup.position.z = Math.sin(angle) * CONFIG.SUN_DIST;
+            // 1. Earth Orbit around Sun using a simple semi-implicit integrator
+            const step = Math.min(delta, 0.5);
+            const mu = gravitationalMu();
+            const rVec = orbitalState.position.clone();
+            const rLen = Math.max(rVec.length(), 1e-5);
+
+            const gravAccel = rVec.clone().multiplyScalar(-mu / (rLen * rLen * rLen));
+            const darkEnergyAccel = rVec.clone().multiplyScalar(CONFIG.DARK_ENERGY);
+
+            orbitalState.velocity.addScaledVector(gravAccel.add(darkEnergyAccel), step);
+            orbitalState.position.addScaledVector(orbitalState.velocity, step);
+            earthGroup.position.copy(orbitalState.position);
 
             // 2. Earth Rotation (Day/Night)
             earthGroup.rotation.y = time * 0.02;
@@ -899,7 +950,10 @@
             if (Math.random() < 0.02) {
                 const t = 14.9 + Math.sin(time * 0.1) * 2;
                 document.getElementById('stat-temp').innerText = t.toFixed(1) + "°C";
-                
+
+                const orbitSpeed = orbitalState.velocity.length();
+                document.getElementById('stat-orbit').innerText = orbitSpeed.toFixed(2) + " u/s";
+
                 if (state.timeScale > 50) {
                      document.getElementById('stat-tect').innerText = "ACCELERATED";
                      document.getElementById('stat-tect').style.color = "#f84";
@@ -1034,6 +1088,9 @@
             document.getElementById('cfg-noise').value = CONFIG.NOISE_SCALE;
             document.getElementById('cfg-water').value = CONFIG.WATER_LEVEL;
             document.getElementById('cfg-atmo').value = CONFIG.ATMO_DENSITY;
+            document.getElementById('cfg-grav').value = CONFIG.GRAV_CONST;
+            document.getElementById('cfg-sun-mass').value = CONFIG.SUN_MASS;
+            document.getElementById('cfg-dark').value = CONFIG.DARK_ENERGY;
             configPanel.style.display = 'block';
         });
         document.getElementById('close-config').addEventListener('click', () => {
@@ -1046,7 +1103,10 @@
             CONFIG.NOISE_SCALE = parseFloat(document.getElementById('cfg-noise').value);
             CONFIG.WATER_LEVEL = parseFloat(document.getElementById('cfg-water').value);
             CONFIG.ATMO_DENSITY = parseFloat(document.getElementById('cfg-atmo').value);
-            
+            CONFIG.GRAV_CONST = parseFloat(document.getElementById('cfg-grav').value);
+            CONFIG.SUN_MASS = parseFloat(document.getElementById('cfg-sun-mass').value);
+            CONFIG.DARK_ENERGY = parseFloat(document.getElementById('cfg-dark').value);
+
             configPanel.style.display = 'none';
             log("CONFIG UPDATED. REGENERATING...");
             await generateWorld();
