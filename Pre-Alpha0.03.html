@@ -161,6 +161,15 @@
                 <span>DARK ENERGY TERM</span>
                 <input type="number" id="cfg-dark" class="bg-gray-900 border border-gray-700 text-white p-1 w-24 text-right" step="0.000001" value="0.000001">
             </div>
+            <div class="flex justify-between items-center">
+                <span>ORBIT ECCENTRICITY</span>
+                <input type="number" id="cfg-eccentricity" class="bg-gray-900 border border-gray-700 text-white p-1 w-24 text-right" step="0.001" min="0" max="0.25" value="0.0167">
+            </div>
+            <div class="flex justify-between items-center">
+                <span>ORBIT SUBSTEPS</span>
+                <input type="number" id="cfg-substeps" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" step="1" min="1" max="20" value="4">
+            </div>
+
             
             <button id="apply-config" class="mt-4 w-full bg-cyan-900 hover:bg-cyan-700 text-white py-2 rounded border border-cyan-600 font-bold tracking-wider transition">RE-GENERATE SIMULATION</button>
             <p class="text-[10px] text-gray-500 mt-2 text-center">WARNING: High values may crash the browser.</p>
@@ -292,6 +301,9 @@
             GRAV_CONST: 6.674e-3, // Scaled gravitational constant for simulation units
             SUN_MASS: 8.6e8, // Tuned to keep stable orbit periods near previous behavior
             EARTH_MASS: 5.9e6,
+            DARK_ENERGY: 1e-6, // Outward acceleration term to tune long-term orbital drift
+            ORBIT_ECCENTRICITY: 0.0167,
+            ORBIT_SUBSTEPS: 4
             DARK_ENERGY: 1e-6 // Outward acceleration term to tune long-term orbital drift
         };
 
@@ -442,6 +454,19 @@
         }
 
         function initializeOrbit() {
+            const eccentricity = THREE.MathUtils.clamp(CONFIG.ORBIT_ECCENTRICITY, 0, 0.25);
+            const a = CONFIG.SUN_DIST; // semi-major axis anchored to chosen distance
+            const rPeriapsis = a * (1 - eccentricity);
+
+            orbitalState.position.set(rPeriapsis, 0, 0);
+
+            // Vis-viva equation for periapsis velocity plus a small inclination
+            const mu = gravitationalMu();
+            const speed = Math.sqrt(mu * (1 + eccentricity) / rPeriapsis);
+            const inclinationFactor = 0.05;
+            const tangentialVel = speed * Math.sqrt(1 - inclinationFactor * inclinationFactor);
+
+            orbitalState.velocity.set(0, speed * inclinationFactor, tangentialVel);
             orbitalState.position.set(CONFIG.SUN_DIST, 0, 0);
 
             // Near-circular orbital velocity with a slight inclination component
@@ -506,6 +531,7 @@
             
             log(`INITIALIZING SYSTEM...`);
             log(`EARTH R=${R}, SUN R=${CONFIG.SUN_RADIUS}`);
+            log(`ORBIT MU=${gravitationalMu().toExponential(3)} | DARK ENERGY=${CONFIG.DARK_ENERGY} | e=${CONFIG.ORBIT_ECCENTRICITY}`);
             log(`ORBIT MU=${gravitationalMu().toExponential(3)} | DARK ENERGY=${CONFIG.DARK_ENERGY}`);
 
             if(boxGeometry) boxGeometry.dispose();
@@ -838,6 +864,22 @@
             const time = state.tick;
 
             // Orbital Mechanics
+            // 1. Earth Orbit around Sun using a semi-implicit integrator with configurable substeps for stability
+            const substeps = Math.min(Math.max(Math.round(CONFIG.ORBIT_SUBSTEPS) || 1, 1), 20);
+            const step = Math.min(delta, 0.5) / substeps;
+            const mu = gravitationalMu();
+
+            for (let i = 0; i < substeps; i++) {
+                const rVec = orbitalState.position.clone();
+                const rLen = Math.max(rVec.length(), 1e-5);
+
+                const gravAccel = rVec.clone().multiplyScalar(-mu / (rLen * rLen * rLen));
+                const darkEnergyAccel = rVec.clone().multiplyScalar(CONFIG.DARK_ENERGY);
+
+                orbitalState.velocity.addScaledVector(gravAccel.add(darkEnergyAccel), step);
+                orbitalState.position.addScaledVector(orbitalState.velocity, step);
+            }
+
             // 1. Earth Orbit around Sun using a simple semi-implicit integrator
             const step = Math.min(delta, 0.5);
             const mu = gravitationalMu();
@@ -1091,6 +1133,8 @@
             document.getElementById('cfg-grav').value = CONFIG.GRAV_CONST;
             document.getElementById('cfg-sun-mass').value = CONFIG.SUN_MASS;
             document.getElementById('cfg-dark').value = CONFIG.DARK_ENERGY;
+            document.getElementById('cfg-eccentricity').value = CONFIG.ORBIT_ECCENTRICITY;
+            document.getElementById('cfg-substeps').value = CONFIG.ORBIT_SUBSTEPS;
             configPanel.style.display = 'block';
         });
         document.getElementById('close-config').addEventListener('click', () => {
@@ -1106,6 +1150,8 @@
             CONFIG.GRAV_CONST = parseFloat(document.getElementById('cfg-grav').value);
             CONFIG.SUN_MASS = parseFloat(document.getElementById('cfg-sun-mass').value);
             CONFIG.DARK_ENERGY = parseFloat(document.getElementById('cfg-dark').value);
+            CONFIG.ORBIT_ECCENTRICITY = parseFloat(document.getElementById('cfg-eccentricity').value);
+            CONFIG.ORBIT_SUBSTEPS = parseInt(document.getElementById('cfg-substeps').value);
 
             configPanel.style.display = 'none';
             log("CONFIG UPDATED. REGENERATING...");
