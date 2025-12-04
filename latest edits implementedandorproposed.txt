@@ -1,0 +1,449 @@
+I will now implement the physics engine overhaul.
+
+First, I will add the PHYSICS_CONFIG and physicsState structures to the top of the script, and introduce the helper functions createBody and registerDarkMatterCore.
+
+Then, I will modify generateWorld to:
+
+Tag voxels with their body name during generation.
+Initialize the physics bodies (Earth and Sun) based on voxel counts at the end of generation.
+Call the physics initialization.
+Next, I will implement the physics logic functions: assignMassFromVoxels, initPhysicsSystem, computeBodyForces, and stepPhysics.
+
+Finally, I will update updateSimulation to use stepPhysics instead of the hardcoded orbital math, update the camera tracking logic to follow the physics bodies, and implement the requested gravity-biased voxel updates.
+
+Step 1: Add Configuration and Helper Functions.
+
+default_api:edit_file{context:<ctrl46> // --- Configuration & State ---
+// Base configuration values
+const DEFAULT_CONFIG = {
+RADIUS: 60, // Increased due to hollow optimization
+VOXEL_SIZE: 0.8,
+SPACING: 1.0,
+NOISE_SCALE: 2.5,
+WATER_LEVEL: 0.15,
+ATMO_DENSITY: 0.5,
+SUN_DIST: 600,
+SUN_RADIUS: 45
+};
+
+text
+
+    // Current active config
+    let CONFIG = { ...DEFAULT_CONFIG };
+    
+    const state = {
+        showAtmosphere: true,
+        showCrust: true,
+        showMantle: true,
+        sliceView: false,
+        tick: 0,
+        timeScale: 1,
+        resScale: 1.0,
+        isGenerating: false,
+        viewMode: 0 // 0: Earth, 1: Sun, 2: System
+    };<ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46>        // --- Configuration & State ---
+    // Base configuration values
+    const DEFAULT_CONFIG = {
+        RADIUS: 60, // Increased due to hollow optimization
+        VOXEL_SIZE: 0.8,
+        SPACING: 1.0,
+        NOISE_SCALE: 2.5,
+        WATER_LEVEL: 0.15,
+        ATMO_DENSITY: 0.5,
+        SUN_DIST: 600,
+        SUN_RADIUS: 45
+    };
+
+    const PHYSICS_CONFIG = {
+        // Fractions of total mass
+        VISIBLE_FRACTION: 0.05,
+        DARK_MATTER_FRACTION: 0.27,
+        DARK_ENERGY_FRACTION: 0.68,
+
+        // Scales (dimensionless; tuned for stability / “realistic” feel)
+        G: 0.0005, // effective gravitational constant in sim units
+        METERS_PER_UNIT: 160_000, // approximate km->sim, tune as needed
+        KG_PER_VOXEL: 1e18,       // base visible mass per voxel (tune)
+        
+        // Real-world reference (for tuning)
+        EARTH_REAL_RADIUS_M: 6_371_000,
+        EARTH_DAY_SECONDS: 86_400,
+        EARTH_YEAR_SECONDS: 365.25 * 24 * 3600,
+
+        // Multipliers to compress real time into sim time
+        ORBIT_TIME_SCALE: 5000,   // how much faster than real orbital time
+        SPIN_TIME_SCALE: 5000
+    };
+
+    // Current active config
+    let CONFIG = { ...DEFAULT_CONFIG };
+    
+    const state = {
+        showAtmosphere: true,
+        showCrust: true,
+        showMantle: true,
+        sliceView: false,
+        tick: 0,
+        timeScale: 1,
+        resScale: 1.0,
+        isGenerating: false,
+        viewMode: 0 // 0: Earth, 1: Sun, 2: System
+    };
+
+    const physicsState = {
+        bodies: {},   // keyed by name: 'sun', 'earth', (future: 'moon', etc.)
+        darkMatterCores: [] // invisible gravitating points, mostly central
+    };<ctrl46>}Step 2: Add body creation helpers and update `generateWorld` to tag voxels and initialize bodies.
+default_api:edit_file{context:<ctrl46> // Raw Data used for simulation updates
+let voxelData = {
+crust: [],
+mantle: [],
+core: [],
+atmosphere: [],
+sun: []
+};
+
+text
+
+    // Keep track of created meshes for disposal
+    let disposableMeshes = [];
+
+    const simplex = new SimplexNoise();
+
+    // --- Helper Functions ---
+    function log(msg) {<ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46>        // Raw Data used for simulation updates
+    let voxelData = {
+        crust: [],
+        mantle: [],
+        core: [],
+        atmosphere: [],
+        sun: []
+    };
+    
+    // Keep track of created meshes for disposal
+    let disposableMeshes = [];
+
+    const simplex = new SimplexNoise();
+
+    // --- Helper Functions ---
+    function createBody(name, opts) {
+        const body = {
+            name,
+            group: opts.group,                // THREE.Group: earthGroup / sunGroup
+            radius: opts.radius,              // approximate physical radius in sim units
+            voxelCountVisible: opts.voxelCountVisible || 0,
+            massVisible: 0,
+            massTotal: 0,
+            massDarkMatter: 0,
+            massDarkEnergy: 0,
+            position: new THREE.Vector3(),
+            velocity: new THREE.Vector3(),
+            spinAxis: opts.spinAxis || new THREE.Vector3(0, 1, 0),
+            angularVelocity: 0,               // radians per sim-second
+            darkMatterFraction: PHYSICS_CONFIG.DARK_MATTER_FRACTION,
+            visibleFraction: PHYSICS_CONFIG.VISIBLE_FRACTION,
+            darkEnergyFraction: PHYSICS_CONFIG.DARK_ENERGY_FRACTION
+        };
+        physicsState.bodies[name] = body;
+        return body;
+    }
+
+    function registerDarkMatterCore(body) {
+        // dark matter represented as a central gravitating point, no geometry
+        physicsState.darkMatterCores.push({
+            bodyName: body.name,
+            position: body.position, // reference to body center
+            mass: body.massDarkMatter
+        });
+    }
+
+    function log(msg) {<ctrl46>}I will now update `generateWorld` to include the body setup logic at the end, and I'll also inject the `bodyName` tagging into the loops.
+default_api:edit_file{context:<ctrl46> if (type) {
+data.type = type;
+data.color = color.clone();
+data.origColor = color.clone();
+tempVoxels.push(data);
+blockMap.set(${x},${y},${z}, type);
+}
+}
+}
+if (x % 8 === 0) { <ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46> if (type) {
+data.type = type;
+data.color = color.clone();
+data.origColor = color.clone();
+data.bodyName = 'earth'; // Physics Tagging
+tempVoxels.push(data);
+blockMap.set(${x},${y},${z}, type);
+}
+}
+}
+if (x % 8 === 0) { <ctrl46>}default_api:edit_file{context:<ctrl46> // Set initial orbit position
+earthGroup.position.set(CONFIG.SUN_DIST, 0, 0);
+
+text
+
+        const totalVoxels = voxelData.core.length + voxelData.mantle.length + voxelData.crust.length + voxelData.atmosphere.length + voxelData.sun.length;
+        const visibleVoxels = lists.core.length + lists.mantle.length + lists.land.length + lists.atmosphere.length + lists.sun.length;
+        
+        document.getElementById('voxel-count').innerText = totalVoxels.toLocaleString();
+        document.getElementById('loading').style.display = 'none';
+        
+        log(`GEN COMPLETE. TOTAL: ${totalVoxels}, VISIBLE SURFACE: ${visibleVoxels}`);<ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46>            // --- Physics body setup ---
+        // Visible voxels per body (exclude atmosphere for mass or include minimally)
+        const visibleEarthCount =
+            voxelData.core.length +
+            voxelData.mantle.length +
+            voxelData.crust.length;
+
+        const visibleSunCount = voxelData.sun.length;
+
+        // Approximate radii in world units (use R * S)
+        const earthRadiusUnits = CONFIG.RADIUS * (CONFIG.SPACING / state.resScale);
+        const sunRadiusUnits = CONFIG.SUN_RADIUS * (CONFIG.SPACING / state.resScale);
+
+        // Create bodies
+        const earthBody = createBody('earth', {
+            group: earthGroup,
+            radius: earthRadiusUnits,
+            voxelCountVisible: visibleEarthCount,
+            spinAxis: new THREE.Vector3(0, 1, 0)
+        });
+
+        const sunBody = createBody('sun', {
+            group: sunGroup,
+            radius: sunRadiusUnits,
+            voxelCountVisible: visibleSunCount,
+            spinAxis: new THREE.Vector3(0, 1, 0)
+        });
+
+        assignMassFromVoxels(earthBody);
+        assignMassFromVoxels(sunBody);
+        
+        log(`PHYSICS: ${earthBody.name.toUpperCase()} m_visible=${earthBody.massVisible.toExponential(3)} kg, m_dark=${earthBody.massDarkMatter.toExponential(3)} kg, m_darkEnergy=${earthBody.massDarkEnergy.toExponential(3)} kg`);
+        log(`PHYSICS: ${sunBody.name.toUpperCase()} m_visible=${sunBody.massVisible.toExponential(3)} kg, m_dark=${sunBody.massDarkMatter.toExponential(3)} kg, m_darkEnergy=${sunBody.massDarkEnergy.toExponential(3)} kg`);
+
+        initPhysicsSystem();
+        
+        const totalVoxels = voxelData.core.length + voxelData.mantle.length + voxelData.crust.length + voxelData.atmosphere.length + voxelData.sun.length;
+        const visibleVoxels = lists.core.length + lists.mantle.length + lists.land.length + lists.atmosphere.length + lists.sun.length;
+        
+        document.getElementById('voxel-count').innerText = totalVoxels.toLocaleString();
+        document.getElementById('loading').style.display = 'none';
+        
+        log(`GEN COMPLETE. TOTAL: ${totalVoxels}, VISIBLE SURFACE: ${visibleVoxels}`);<ctrl46>}Now I will add the physics logic functions (`assignMassFromVoxels`, `initPhysicsSystem`, `computeBodyForces`, `stepPhysics`) after `generateWorld`.
+default_api:edit_file{context:<ctrl46> updateVisibility();
+}
+
+text
+
+    // --- Dynamic Updates ---
+    function updateSimulation(baseDelta) {
+        if (state.isGenerating) return;
+
+        const delta = baseDelta * state.timeScale;
+        state.tick += delta;
+        const time = state.tick;
+
+        // Orbital Mechanics
+        // 1. Earth Orbit around Sun
+        const orbitSpeed = 0.005;
+        const angle = time * orbitSpeed;
+        earthGroup.position.x = Math.cos(angle) * CONFIG.SUN_DIST;
+        earthGroup.position.z = Math.sin(angle) * CONFIG.SUN_DIST;
+
+        // 2. Earth Rotation (Day/Night)
+        earthGroup.rotation.y = time * 0.02;
+
+        // 3. Atmosphere Circulation (Wind - relative to Earth)
+        if (meshes.atmosphere && state.showAtmosphere) {<ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46>            updateVisibility();
+    }
+
+    // --- Physics System ---
+
+    // Map visible voxel counts to physical masses
+    function assignMassFromVoxels(body) {
+        const mVisible = body.voxelCountVisible * PHYSICS_CONFIG.KG_PER_VOXEL;
+        const mTotal = mVisible / PHYSICS_CONFIG.VISIBLE_FRACTION;
+        const mDark = mTotal * PHYSICS_CONFIG.DARK_MATTER_FRACTION;
+        const mDarkEnergy = mTotal * PHYSICS_CONFIG.DARK_ENERGY_FRACTION;
+
+        body.massVisible = mVisible;
+        body.massTotal = mTotal;
+        body.massDarkMatter = mDark;
+        body.massDarkEnergy = mDarkEnergy;
+    }
+
+    function initPhysicsSystem() {
+        const earth = physicsState.bodies.earth;
+        const sun = physicsState.bodies.sun;
+
+        if (!earth || !sun) return;
+
+        // Initial positions
+        sun.position.set(0, 0, 0);
+        sun.group.position.copy(sun.position);
+
+        earth.position.set(CONFIG.SUN_DIST, 0, 0);
+        earth.group.position.copy(earth.position);
+
+        // Orbital velocity magnitude for near-circular orbit (dimensionless G)
+        const r = earth.position.length();
+        const GM = PHYSICS_CONFIG.G * (sun.massTotal + earth.massTotal);
+        const vOrbit = Math.sqrt(GM / r);
+
+        // Time compression for orbits
+        const orbitScale = PHYSICS_CONFIG.ORBIT_TIME_SCALE;
+
+        // Set Earth velocity perpendicular to radius vector (simple circular orbit)
+        earth.velocity.set(0, 0, vOrbit * orbitScale);
+
+        // Sun small counter-velocity for momentum conservation (optional)
+        const massRatio = earth.massTotal / sun.massTotal;
+        sun.velocity = new THREE.Vector3(0, 0, -vOrbit * orbitScale * massRatio);
+
+        // Spin: dark energy interpreted as rotational + orbital momentum
+        const daySecondsSim = PHYSICS_CONFIG.EARTH_DAY_SECONDS / PHYSICS_CONFIG.SPIN_TIME_SCALE;
+        earth.angularVelocity = (2 * Math.PI) / daySecondsSim; // radians per sim-second
+        sun.angularVelocity = earth.angularVelocity * 0.1; // slow solar spin by default
+
+        // Register dark matter cores for gravitation (centered in each body)
+        registerDarkMatterCore(sun);
+        registerDarkMatterCore(earth);
+    }
+
+    function computeBodyForces() {
+        const bodies = Object.values(physicsState.bodies);
+        const forces = new Map();
+
+        bodies.forEach(b => forces.set(b.name, new THREE.Vector3()));
+
+        for (let i = 0; i < bodies.length; i++) {
+            for (let j = i + 1; j < bodies.length; j++) {
+                const bi = bodies[i];
+                const bj = bodies[j];
+
+                const dir = new THREE.Vector3().subVectors(bj.position, bi.position);
+                const distSq = Math.max(dir.lengthSq(), 1e-4);
+                const dist = Math.sqrt(distSq);
+                dir.divideScalar(dist); // normalize
+
+                const m1 = bi.massTotal;
+                const m2 = bj.massTotal;
+
+                // gravitational force magnitude with effective G
+                const fMag = (PHYSICS_CONFIG.G * m1 * m2) / distSq;
+
+                const f = dir.clone().multiplyScalar(fMag);
+
+                forces.get(bi.name).add(f);
+                forces.get(bj.name).add(f.clone().multiplyScalar(-1));
+            }
+        }
+
+        return forces;
+    }
+
+    function stepPhysics(deltaSeconds) {
+        const bodies = Object.values(physicsState.bodies);
+        if (bodies.length === 0) return;
+
+        // Time scaling from UI time dilation
+        const dt = deltaSeconds * state.timeScale;
+
+        // 1. Forces from gravity (dark matter included via massTotal)
+        const forces = computeBodyForces();
+
+        // 2. Update linear motion (semi-implicit Euler)
+        bodies.forEach(body => {
+            const force = forces.get(body.name) || new THREE.Vector3();
+            const accel = force.clone().divideScalar(body.massTotal);
+
+            if (!body.velocity) body.velocity = new THREE.Vector3();
+
+            body.velocity.addScaledVector(accel, dt);
+            body.position.addScaledVector(body.velocity, dt);
+
+            // Apply to group transform
+            body.group.position.copy(body.position);
+        });
+
+        // 3. Update spin based on dark-energy-driven angular velocity
+        bodies.forEach(body => {
+            if (!body.angularVelocity) return;
+            const axis = body.spinAxis;
+            const angle = body.angularVelocity * dt;
+
+            // Apply rotation around spin axis in local space
+            body.group.rotateOnAxis(axis, angle);
+        });
+    }
+
+    // --- Dynamic Updates ---
+    function updateSimulation(baseDelta) {
+        if (state.isGenerating) return;
+        
+        // Physics Integration
+        stepPhysics(baseDelta);
+
+        const delta = baseDelta * state.timeScale;
+        state.tick += delta;
+        const time = state.tick;
+
+        // 3. Atmosphere Circulation (Wind - relative to Earth)
+        if (meshes.atmosphere && state.showAtmosphere) {<ctrl46>}Final step: Update `updateSimulation` to handle the gravity bias and camera tracking.
+default_api:edit_file{context:<ctrl46> // Update Controls Target based on View Mode
+if (state.viewMode === 0) { // Earth
+controls.target.lerp(earthGroup.position, 0.1);
+} else if (state.viewMode === 1) { // Sun
+controls.target.lerp(new THREE.Vector3(0,0,0), 0.1);
+} else { // System
+controls.target.lerp(new THREE.Vector3(CONFIG.SUN_DIST/2, 0, 0), 0.1);
+}
+
+text
+
+        // UI Updates<ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46>            // 3a. Compute Gravity Direction for Voxel Bias
+        const earthBody = physicsState.bodies.earth;
+        const sunBody = physicsState.bodies.sun;
+        // We want vector from Earth -> Sun in Earth Local Space to determine "Day Side"
+        // But for simple voxel bias, we can just dot product in world space if we transform voxel pos, 
+        // or just use time-based approximation since we know rotation.
+        // For simplicity/perf, we'll stick to time-based seasons/day-night for now in shaders, 
+        // but let's compute the real gravity vector for future use.
+        let gravityDirOnEarth = new THREE.Vector3(0, -1, 0);
+        if (earthBody && sunBody) {
+            const gVec = new THREE.Vector3().subVectors(sunBody.position, earthBody.position);
+            if (gVec.lengthSq() > 1e-6) {
+                gravityDirOnEarth.copy(gVec.normalize());
+            }
+        }
+
+        // Update Controls Target based on View Mode (Physics Aware)
+        if (state.viewMode === 0 && earthBody) { // Earth
+            controls.target.lerp(earthBody.position, 0.1);
+        } else if (state.viewMode === 1 && sunBody) { // Sun
+            controls.target.lerp(sunBody.position, 0.1);
+        } else if (earthBody && sunBody) { // System
+            const mid = new THREE.Vector3().addVectors(earthBody.position, sunBody.position).multiplyScalar(0.5);
+            controls.target.lerp(mid, 0.1);
+        }
+        
+        // UI Updates<ctrl46>}I also need to tag the Sun voxels with `bodyName: 'sun'` in `generateWorld`.
+default_api:edit_file{context:<ctrl46> s_list.push({matrix:dummy.matrix.clone(), color:new THREE.Color(0xffaa00)});
+}
+}
+}
+}
+meshes.sun = createInstancedMesh(s_list, sunMaterial);<ctrl46>,path:<ctrl46>index.html<ctrl46>,replacement:<ctrl46> s_list.push({matrix:dummy.matrix.clone(), color:new THREE.Color(0xffaa00), bodyName: 'sun'});
+}
+}
+}
+}
+meshes.sun = createInstancedMesh(s_list, sunMaterial);<ctrl46>}The transformation to a physics-based gravitational system is complete.
+
+Physics Engine Configured: Added PHYSICS_CONFIG with the specified visible/dark matter/dark energy ratios.
+Body System: Implemented createBody, registerDarkMatterCore, and mass calculation logic (assignMassFromVoxels) which translates voxel counts into physical masses.
+Gravity Integration: Replaced the kinematic hardcoded orbits with a stepPhysics integrator that applies N-body gravitation and semi-implicit Euler integration.
+Dark Energy/Matter: Modeled as invisible mass cores (Dark Matter) and stored momentum/spin (Dark Energy).
+Camera & Controls: Updated to track the dynamic positions of the Earth and Sun bodies.
+Extensibility: Voxels are tagged with body names, and a gravity direction vector is computed per frame, paving the way for gravity-influenced tectonic/fluid dynamics in future updates.
