@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Earth Voxel Simulation (Beta)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; color: #fff; font-family: 'Courier New', Courier, monospace; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .pointer-events-auto { pointer-events: auto; }
+        
+        /* HUD Styling */
+        .hud-panel {
+            background: rgba(0, 10, 20, 0.85);
+            border: 1px solid #00aaff;
+            box-shadow: 0 0 15px rgba(0, 170, 255, 0.2);
+            backdrop-filter: blur(6px);
+            transition: all 0.3s ease;
+        }
+        .hud-panel:hover {
+            border-color: #44ccff;
+            box-shadow: 0 0 20px rgba(0, 170, 255, 0.4);
+        }
+        
+        .voxel-stat { font-size: 0.75rem; color: #00aaff; letter-spacing: 1px; }
+        .voxel-val { color: #fff; font-weight: bold; text-shadow: 0 0 5px rgba(255,255,255,0.5); }
+        
+        /* Inputs */
+        input[type="range"] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 14px;
+            width: 14px;
+            border-radius: 50%;
+            background: #00aaff;
+            cursor: pointer;
+            margin-top: -5px;
+            box-shadow: 0 0 10px #00aaff;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #334;
+            border-radius: 2px;
+        }
+        
+        /* Overlay Panels (Center) */
+        .center-panel {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(5, 10, 15, 0.95);
+            border: 1px solid #00aaff;
+            box-shadow: 0 0 50px rgba(0, 170, 255, 0.2);
+            padding: 20px;
+            border-radius: 4px;
+            z-index: 100;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .close-btn {
+            position: absolute; top: 10px; right: 10px;
+            color: #555; cursor: pointer; font-weight: bold;
+        }
+        .close-btn:hover { color: #fff; }
+
+        /* Legend */
+        .legend-item { display: flex; align-items: center; margin-bottom: 6px; font-size: 0.75rem; border-bottom: 1px solid #223; padding-bottom: 2px; }
+        .legend-color { width: 14px; height: 14px; display: inline-block; margin-right: 10px; border: 1px solid #555; }
+
+        /* Loading */
+        #loading {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #020205; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 999;
+        }
+        .loader-bar { width: 300px; height: 2px; background: #111; margin-top: 20px; position: relative; overflow: hidden; }
+        .loader-progress { width: 0%; height: 100%; background: #00aaff; box-shadow: 0 0 20px #00aaff; transition: width 0.1s linear; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #001; }
+        ::-webkit-scrollbar-thumb { background: #004; }
+        ::-webkit-scrollbar-thumb:hover { background: #006; }
+    </style>
+</head>
+<body>
+
+    <!-- Legend Panel -->
+    <div id="legend-panel" class="center-panel">
+        <div class="close-btn" id="close-legend">X</div>
+        <h3 class="text-lg text-cyan-400 font-bold mb-4 border-b border-cyan-900 pb-2 tracking-widest">VOXEL CLASSIFICATION</h3>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+            <div class="legend-item"><span class="legend-color" style="background:#fff;"></span>Cryosphere (Ice)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#113366;"></span>Hydrosphere (Deep Ocean)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#2255aa;"></span>Hydrosphere (Shallow)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#115522;"></span>Biosphere (Rainforest)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#448833;"></span>Biosphere (Grassland)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#ddeebb;"></span>Lithosphere (Sand/Desert)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#665555;"></span>Lithosphere (Mountain)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#ffffff;"></span>Lithosphere (Polar/Peak)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#c42;"></span>Mantle (Magma)</div>
+            <div class="legend-item"><span class="legend-color" style="background:#fe8;"></span>Core (Plasma)</div>
+            <div class="legend-item"><span class="legend-color" style="background:rgba(255,255,255,0.9);"></span>Atmosphere (Cloud)</div>
+            <div class="legend-item"><span class="legend-color" style="background:rgba(136,204,255,0.8);"></span>Atmosphere (Gas)</div>
+        </div>
+    </div>
+
+    <!-- Config Panel -->
+    <div id="config-panel" class="center-panel">
+        <div class="close-btn" id="close-config">X</div>
+        <h3 class="text-lg text-cyan-400 font-bold mb-4 border-b border-cyan-900 pb-2 tracking-widest">SIMULATION CONFIG</h3>
+        <div class="grid grid-cols-1 gap-3 text-xs">
+            <div class="flex justify-between items-center">
+                <span>BASE RADIUS (Voxels)</span>
+                <input type="number" id="cfg-radius" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" value="40">
+            </div>
+            <div class="flex justify-between items-center">
+                <span>VOXEL SIZE</span>
+                <input type="number" id="cfg-size" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" step="0.1" value="0.8">
+            </div>
+            <div class="flex justify-between items-center">
+                <span>NOISE SCALE (Terrain)</span>
+                <input type="number" id="cfg-noise" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" step="0.1" value="2.5">
+            </div>
+            <div class="flex justify-between items-center">
+                <span>WATER LEVEL (0.0 - 1.0)</span>
+                <input type="number" id="cfg-water" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" step="0.05" value="0.15">
+            </div>
+             <div class="flex justify-between items-center">
+                <span>ATMOSPHERE DENSITY</span>
+                <input type="number" id="cfg-atmo" class="bg-gray-900 border border-gray-700 text-white p-1 w-20 text-right" step="0.1" value="0.5">
+            </div>
+            
+            <button id="apply-config" class="mt-4 w-full bg-cyan-900 hover:bg-cyan-700 text-white py-2 rounded border border-cyan-600 font-bold tracking-wider transition">RE-GENERATE SIMULATION</button>
+            <p class="text-[10px] text-gray-500 mt-2 text-center">WARNING: High values may crash the browser.</p>
+        </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading">
+        <h1 class="text-3xl font-bold text-cyan-400 tracking-[0.3em] mb-2">EARTH SIMULATION</h1>
+        <div class="text-xs text-gray-500 font-mono">INITIALIZING VOXEL MATRICES & LOD SYSTEM...</div>
+        <div class="loader-bar"><div class="loader-progress" id="load-bar"></div></div>
+        <div id="load-status" class="text-cyan-500 mt-2 text-xs font-bold">0%</div>
+    </div>
+
+    <!-- 3D Container -->
+    <div id="canvas-container"></div>
+    
+    <!-- Start Instruction Overlay -->
+    <div id="start-overlay" class="center-panel" style="display:block; z-index: 2000; text-align: center;">
+        <h2 class="text-2xl text-cyan-400 font-bold mb-2 tracking-widest">VOXEL EARTH SIMULATION</h2>
+        <p class="text-sm text-gray-300 mb-4">Procedural Planet | Dynamic LOD System</p>
+        <ul class="text-xs text-left text-gray-400 mb-4 space-y-1 bg-gray-900 p-4 rounded border border-gray-700">
+            <li>• <b>LOD System:</b> Automatically switches between High/Low detail based on zoom.</li>
+            <li>• <b>Navigate:</b> Left Click to Rotate, Right Click to Pan, Scroll to Zoom</li>
+            <li>• <b>Simulation:</b> Accelerate time to 1000x to see ice ages and weather.</li>
+            <li>• <b>Slice View:</b> Toggle Cross-Section to reveal the active core.</li>
+        </ul>
+        <button onclick="document.getElementById('start-overlay').style.display='none'" class="bg-cyan-700 hover:bg-cyan-600 text-white font-bold py-2 px-6 rounded border border-cyan-500 shadow-[0_0_15px_rgba(0,200,255,0.4)] transition">INITIALIZE</button>
+    </div>
+
+    <!-- UI Layer -->
+    <div id="ui-layer" class="flex flex-col justify-between p-4">
+        <!-- Header -->
+        <div class="flex justify-between items-start pointer-events-auto">
+            <!-- Left Stats -->
+            <div class="hud-panel p-4 rounded max-w-xs">
+                <h2 class="text-xl font-bold text-cyan-400 mb-1 tracking-widest">EARTH-10k</h2>
+                <p class="text-[10px] text-gray-400 mb-3">PROCEDURAL PLANETARY ENGINE v2.1</p>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                    <div><span class="voxel-stat">ATMO PRESS:</span> <br><span id="stat-atmo" class="voxel-val">101.3 kPa</span></div>
+                    <div><span class="voxel-stat">TECTONICS:</span> <br><span id="stat-tect" class="voxel-val">STABLE</span></div>
+                    <div><span class="voxel-stat">MAGMA FLOW:</span> <br><span id="stat-magma" class="voxel-val">ACTIVE</span></div>
+                    <div><span class="voxel-stat">AVG TEMP:</span> <br><span id="stat-temp" class="voxel-val">14.9°C</span></div>
+                    <div class="col-span-2 mt-1 pt-2 border-t border-gray-800">
+                        <span class="voxel-stat">POPULATION:</span> <span class="voxel-val text-gray-500">0 (UNINHABITED)</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right Controls -->
+            <div class="flex flex-col gap-2 w-64">
+                <!-- Simulation Speed & Complexity -->
+                <div class="hud-panel p-3 rounded pointer-events-auto">
+                    <div class="text-[10px] text-cyan-400 font-bold mb-2 border-b border-cyan-900 pb-1 tracking-wider">SIMULATION CONTROL</div>
+                    
+                    <!-- Time -->
+                    <div class="mb-3">
+                        <div class="flex justify-between text-[10px] text-gray-300 mb-1">
+                            <span>TIME DILATION</span>
+                            <span id="time-val" class="text-cyan-300 font-bold">1x</span>
+                        </div>
+                        <input type="range" id="time-slider" min="1" max="1000" value="1" class="w-full">
+                    </div>
+                    
+                    <!-- Resolution -->
+                    <div class="mb-3">
+                        <div class="flex justify-between text-[10px] text-gray-300 mb-1">
+                            <span>VOXEL DENSITY</span>
+                            <span id="res-val" class="text-cyan-300 font-bold">1.0x</span>
+                        </div>
+                        <div class="flex gap-1 mb-1">
+                            <button id="res-down" class="flex-1 bg-gray-800 hover:bg-gray-700 text-[10px] py-1 border border-gray-600 rounded text-gray-300">0.5x</button>
+                            <button id="res-up" class="flex-1 bg-gray-800 hover:bg-gray-700 text-[10px] py-1 border border-gray-600 rounded text-gray-300">2x</button>
+                        </div>
+                        <div class="text-[9px] text-gray-500 text-right">ACTIVE VOXELS: <span id="voxel-count" class="text-gray-300">0</span></div>
+                    </div>
+
+                    <!-- Toggles -->
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="toggle-info" class="bg-cyan-900/50 hover:bg-cyan-800 text-cyan-200 text-[10px] py-1 rounded border border-cyan-800 transition">INFO / LEGEND</button>
+                        <button id="toggle-config" class="bg-gray-800 hover:bg-gray-700 text-gray-300 text-[10px] py-1 rounded border border-gray-600 transition">CONFIG</button>
+                    </div>
+                </div>
+
+                <!-- View Controls -->
+                <div class="hud-panel p-2 rounded pointer-events-auto grid grid-cols-2 gap-1">
+                    <button id="toggle-atmo" class="bg-blue-900/30 hover:bg-blue-800 text-blue-200 text-[10px] py-1 rounded border border-blue-900/50 transition">ATMOSPHERE</button>
+                    <button id="toggle-crust" class="bg-green-900/30 hover:bg-green-800 text-green-200 text-[10px] py-1 rounded border border-green-900/50 transition">CRUST</button>
+                    <button id="toggle-mantle" class="bg-red-900/30 hover:bg-red-800 text-red-200 text-[10px] py-1 rounded border border-red-900/50 transition">MANTLE</button>
+                    <button id="slice-view" class="bg-gray-800 hover:bg-gray-600 text-white text-[10px] py-1 rounded border border-gray-500 transition shadow-[0_0_5px_rgba(255,255,255,0.1)]">CROSS-SECTION</button>
+                    <button id="view-mode" class="col-span-2 bg-amber-900/40 hover:bg-amber-700 text-amber-200 text-[10px] py-1 rounded border border-amber-600/50 transition font-bold tracking-wider">VIEW: EARTH</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex justify-between items-end pointer-events-auto">
+            <div class="hud-panel p-3 rounded">
+                <div class="text-[10px] text-cyan-600 mb-1 uppercase tracking-wider">System Log</div>
+                <div id="sim-log" class="text-[10px] h-24 w-80 overflow-y-auto font-mono text-green-400/80 leading-tight p-1 bg-black/20 rounded inner-shadow">
+                    > INITIALIZING KERNEL...
+                </div>
+            </div>
+            
+            <div class="text-right text-[9px] text-gray-600 p-2 font-mono">
+                RENDER: THREE.JS WEBGL2 | PHYSICS: PROCEDURAL | SCALE: 10000:1<br>
+                EARTH RADIUS: ~6371 KM (SIMULATED)
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { SimplexNoise } from 'three/addons/math/SimplexNoise.js';
+
+        // --- Configuration & State ---
+        // Base configuration values
+        const DEFAULT_CONFIG = {
+            RADIUS: 40,
+            VOXEL_SIZE: 0.8,
+            SPACING: 1.0,
+            NOISE_SCALE: 2.5,
+            WATER_LEVEL: 0.15,
+            ATMO_DENSITY: 0.5,
+            SUN_DIST: 400,
+            SUN_RADIUS: 45
+        };
+
+        // Current active config
+        let CONFIG = { ...DEFAULT_CONFIG };
+        
+        const state = {
+            showAtmosphere: true,
+            showCrust: true,
+            showMantle: true,
+            sliceView: false,
+            tick: 0,
+            timeScale: 1,
+            resScale: 1.0,
+            isGenerating: false,
+            viewMode: 0 // 0: Earth, 1: Sun, 2: System
+        };
+        
+        // Optimize: Do not check slice logic every frame if not active
+        const crossSectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+
+        // --- Init Three.js ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020205);
+        scene.fog = new THREE.FogExp2(0x020205, 0.0005); // Reduced fog density for system view visibility
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000); // Increased far plane
+        camera.position.set(80, 60, 100);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.localClippingEnabled = true; // Enable clipping for cross-section
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = false; 
+        controls.maxDistance = 2000; // Increased for System view
+
+        // --- Groups ---
+        const solarSystem = new THREE.Group();
+        scene.add(solarSystem);
+
+        const earthGroup = new THREE.Group();
+        solarSystem.add(earthGroup);
+
+        const sunGroup = new THREE.Group();
+        solarSystem.add(sunGroup);
+
+        // --- Lighting ---
+        // Sun light source - High intensity for physical lighting scale
+        const sunLightSource = new THREE.PointLight(0xffffff, 250000, 0); // High Intensity, Infinite Distance (0)
+        sunLightSource.decay = 1.5; // Slight decay for realism but strong reach
+        sunGroup.add(sunLightSource);
+
+        // Ambient light - Boosted for visibility in shadows
+        const ambientLight = new THREE.AmbientLight(0x303040, 0.6); 
+        scene.add(ambientLight);
+        
+        // Earth Core Light - Boosted
+        const coreLight = new THREE.PointLight(0xffaa00, 50, 100);
+        coreLight.decay = 1;
+        earthGroup.add(coreLight);
+
+        // Camera flashlight for Slice View exploration
+        const flashlight = new THREE.PointLight(0xffffff, 100, 0);
+        flashlight.decay = 1;
+        scene.add(flashlight);
+
+        // --- Clipping ---
+        // Plane defined in world space, updated dynamically to track Earth
+
+        // --- Materials ---
+        const voxelMaterial = new THREE.MeshStandardMaterial({ 
+            roughness: 0.8,
+            metalness: 0.2,
+            flatShading: true,
+            clippingPlanes: [], // Populated dynamically
+            clipShadows: true
+        });
+
+        const sunMaterial = new THREE.MeshStandardMaterial({
+            emissive: 0xffaa00,
+            emissiveIntensity: 2,
+            color: 0xffaa00,
+            roughness: 0.2,
+            // No clipping planes for Sun
+        });
+
+        const atmosphereMaterial = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.3,
+            roughness: 1,
+            metalness: 0,
+            depthWrite: false,
+            clippingPlanes: [], // Populated dynamically
+        });
+
+        // --- Geometry ---
+        let boxGeometry = new THREE.BoxGeometry(1,1,1); // Placeholder, updated on generation
+
+        // --- Data Structures ---
+        let meshes = {
+            earthLOD: null, // THREE.LOD object
+            atmosphere: null,
+            sun: null
+        };
+        
+        // Raw Data used for simulation updates
+        let voxelData = {
+            crust: [],
+            mantle: [],
+            core: [],
+            atmosphere: [],
+            sun: []
+        };
+        
+        // Keep track of created meshes for disposal
+        let disposableMeshes = [];
+
+        const simplex = new SimplexNoise();
+
+        // --- Helper Functions ---
+        function log(msg) {
+            const logEl = document.getElementById('sim-log');
+            const line = document.createElement('div');
+            line.innerHTML = `<span class="text-cyan-700">[${new Date().toLocaleTimeString().split(' ')[0]}]</span> ${msg}`;
+            logEl.appendChild(line);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function noise3d(x, y, z, scale = 1) {
+            return simplex.noise3d(x * scale, y * scale, z * scale);
+        }
+
+        function clearWorld() {
+            // Helper to dispose a mesh or group of meshes
+            const cleanup = (obj) => {
+                if (!obj) return;
+                if (obj.isMesh || obj.isInstancedMesh) {
+                    obj.geometry.dispose();
+                    if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                    else obj.material.dispose();
+                }
+                if (obj.children) {
+                    [...obj.children].forEach(cleanup);
+                }
+            };
+
+            if (meshes.earthLOD) {
+                earthGroup.remove(meshes.earthLOD);
+                cleanup(meshes.earthLOD);
+            }
+            if (meshes.atmosphere) {
+                earthGroup.remove(meshes.atmosphere);
+                cleanup(meshes.atmosphere);
+            }
+            if (meshes.sun) {
+                sunGroup.remove(meshes.sun);
+                cleanup(meshes.sun);
+            }
+            
+            disposableMeshes.forEach(m => {
+                if(m.parent) m.parent.remove(m);
+                cleanup(m);
+            });
+            disposableMeshes = [];
+
+            meshes = { earthLOD: null, atmosphere: null, sun: null };
+            voxelData = { crust: [], mantle: [], core: [], atmosphere: [], sun: [] };
+        }
+
+        // --- Voxel Generation ---
+        async function generateWorld() {
+            if (state.isGenerating) return;
+            state.isGenerating = true;
+            
+            document.getElementById('loading').style.display = 'flex';
+            document.getElementById('load-status').innerText = '0%';
+            document.getElementById('load-bar').style.width = '0%';
+            
+            const R = Math.round(CONFIG.RADIUS * state.resScale);
+            const S = CONFIG.SPACING / state.resScale;
+            const V_SIZE = CONFIG.VOXEL_SIZE / state.resScale;
+            
+            log(`INITIALIZING SYSTEM...`);
+            log(`EARTH R=${R}, SUN R=${CONFIG.SUN_RADIUS}`);
+
+            if(boxGeometry) boxGeometry.dispose();
+            boxGeometry = new THREE.BoxGeometry(V_SIZE, V_SIZE, V_SIZE);
+
+            clearWorld();
+
+            // Temporary structures for generation
+            const tempVoxels = []; // All generated voxels
+            const blockMap = new Map(); // For occlusion checking
+
+            const dummy = new THREE.Object3D();
+            const updateProgress = (val) => {
+                const pct = Math.round(val * 100);
+                document.getElementById('load-status').innerText = `${pct}%`;
+                document.getElementById('load-bar').style.width = `${pct}%`;
+            };
+
+            // 1. Generate Earth Data
+            const range = R + Math.ceil(R * 0.4);
+            const R_sq = R * R;
+            const core_R_sq = (R * 0.35) * (R * 0.35);
+            const mantle_R_sq = (R * 0.85) * (R * 0.85);
+            const nScale = (1 / R) * CONFIG.NOISE_SCALE;
+
+            for (let x = -range; x <= range; x++) {
+                for (let y = -range; y <= range; y++) {
+                    for (let z = -range; z <= range; z++) {
+                        const distSq = x*x + y*y + z*z;
+                        if (distSq > range * range) continue;
+
+                        const dist = Math.sqrt(distSq);
+                        const nx = x * nScale, ny = y * nScale, nz = z * nScale;
+                        
+                        let type = null, color = new THREE.Color();
+                        let data = { x, y, z, dist, origColor: null };
+
+                        if (distSq < core_R_sq) {
+                            type = 'core';
+                            const heat = 0.5 + 0.5 * Math.random();
+                            color.setHSL(0.1 + (heat * 0.08), 1.0, 0.5 + (heat * 0.4));
+                        } else if (distSq < mantle_R_sq) {
+                            type = 'mantle';
+                            const n = noise3d(nx*2, ny*2, nz*2, 1.0);
+                            const gradient = (dist / R); // depth gradient
+                            // Darker red deeper down, brighter orange near crust
+                            color.setHSL(0.04, 1.0, 0.2 + (n * 0.1) + (gradient * 0.15));
+                        } else if (dist < R) {
+                            const h = noise3d(nx, ny, nz, 1.0) + 0.5 * noise3d(nx, ny, nz, 2.0) * 0.5;
+                            const surfaceLimit = R - 2 + (h * 4);
+                            
+                            if (dist < surfaceLimit) {
+                                type = 'crust';
+                                const lat = Math.abs(y / R);
+                                const tempNoise = noise3d(nx, ny, nz + 100, 0.5);
+                                const moistureNoise = noise3d(nx + 50, ny, nz, 0.5); // Moisture map
+                                
+                                const globalTemp = (1 - lat) + (tempNoise * 0.2);
+                                const landThreshold = CONFIG.WATER_LEVEL;
+
+                                if (h < landThreshold) {
+                                    data.isWater = true;
+                                    data.temp = 10 * globalTemp;
+                                    
+                                    // Ice Cap
+                                    if (globalTemp < 0.15) {
+                                         color.setHSL(0.55, 0.4, 0.9); // White/Blue Ice
+                                         data.state = 'ice';
+                                    } else {
+                                        // Ocean Depth
+                                        data.state = 'liquid';
+                                        if (h < landThreshold - 0.15) {
+                                            color.setHex(0x113366); // Deep Ocean
+                                        } else {
+                                            color.setHex(0x2255aa); // Shallow Water
+                                        }
+                                    }
+                                } else {
+                                    data.isLand = true;
+                                    
+                                    // Biomes based on Height, Temp, Moisture
+                                    if (globalTemp < 0.15 || lat > 0.85) {
+                                        color.setHex(0xffffff); // Polar Snow
+                                    } else if (h > 0.5) {
+                                        color.setHex(0x665555); // Mountain Rock
+                                        if (h > 0.7) color.setHex(0xeeeeee); // Mountain Peak
+                                    } else {
+                                        // Temperate/Tropical
+                                        if (moistureNoise < -0.25) {
+                                            color.setHex(0xddeebb); // Sand/Desert
+                                        } else if (moistureNoise > 0.25 && globalTemp > 0.4) {
+                                            color.setHex(0x115522); // Rainforest
+                                        } else if (moistureNoise > 0.0) {
+                                            color.setHex(0x227733); // Forest
+                                        } else {
+                                            color.setHex(0x448833); // Grassland
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (dist < R * 1.25) {
+                            const atmoNoise = noise3d(nx + 50, ny, nz, 1.5);
+                            const densityThreshold = 1.0 - CONFIG.ATMO_DENSITY * 0.6;
+                            
+                            if (atmoNoise > densityThreshold) {
+                                type = 'atmosphere';
+                                if (atmoNoise > densityThreshold + 0.2) {
+                                    // Cloud
+                                    color.setHSL(0.0, 0.0, 0.9);
+                                } else {
+                                    // Gas
+                                    color.setHSL(0.6, 0.4, 0.7); 
+                                }
+                            }
+                        }
+
+                        if (type) {
+                            data.type = type;
+                            data.color = color.clone();
+                            data.origColor = color.clone();
+                            
+                            tempVoxels.push(data);
+                            blockMap.set(`${x},${y},${z}`, type);
+                        }
+                    }
+                }
+                if (x % 8 === 0) { 
+                     updateProgress(0.5 * (x + range) / (range * 2)); 
+                     await new Promise(r => setTimeout(r, 0)); 
+                }
+            }
+
+            // 2. Occlusion Culling & Sorting
+            const lists = {
+                core: { surface: [], internal: [] },
+                mantle: { surface: [], internal: [] },
+                crust: { surface: [], internal: [] },
+                atmosphere: [],
+                sun: []
+            };
+
+            const checkNeighbor = (x, y, z) => {
+                const type = blockMap.get(`${x},${y},${z}`);
+                // If neighbor is missing or is atmosphere, current voxel is visible
+                return !type || type === 'atmosphere';
+            };
+
+            let pCount = 0;
+            const neighborOffsets = [
+                [1,0,0], [-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]
+            ];
+
+            for (const v of tempVoxels) {
+                // Calculate Matrix
+                dummy.position.set(v.x * S, v.y * S, v.z * S);
+                dummy.updateMatrix();
+                v.matrix = dummy.matrix.clone();
+
+                if (v.type === 'atmosphere') {
+                    lists.atmosphere.push(v);
+                } else {
+                    let isSurface = false;
+                    for (const off of neighborOffsets) {
+                        if (checkNeighbor(v.x + off[0], v.y + off[1], v.z + off[2])) {
+                            isSurface = true;
+                            break;
+                        }
+                    }
+                    if (isSurface) lists[v.type].surface.push(v);
+                    else lists[v.type].internal.push(v);
+                }
+                
+                pCount++;
+                if (pCount % 2000 === 0) {
+                    updateProgress(0.5 + 0.3 * (pCount / tempVoxels.length));
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+            
+            // 3. Generate Sun
+            const S_R = CONFIG.SUN_RADIUS;
+            const S_R_SQ = S_R * S_R;
+            const sunStep = 2; 
+            
+            for (let x = -S_R; x <= S_R; x+=sunStep) {
+                for (let y = -S_R; y <= S_R; y+=sunStep) {
+                    for (let z = -S_R; z <= S_R; z+=sunStep) {
+                        const distSq = x*x + y*y + z*z;
+                        if (distSq > S_R_SQ) continue;
+                        
+                        const pn = noise3d(x, y, z, 0.1);
+                        const color = new THREE.Color().setHSL(0.05 + pn * 0.05, 1.0, 0.6 + pn * 0.4);
+                        
+                        dummy.position.set(x * S, y * S, z * S);
+                        dummy.updateMatrix();
+                        lists.sun.push({
+                            matrix: dummy.matrix.clone(),
+                            color: color
+                        });
+                    }
+                }
+                // Fast enough to not yield
+            }
+            updateProgress(0.9);
+
+            // 4. Create Meshes & Final Data
+            
+            // Helper: Create Mesh from data
+            function createInstancedMesh(instData, mat, scale = 1.0) {
+                if (instData.length === 0) return null;
+                const geo = scale === 1.0 ? boxGeometry : new THREE.BoxGeometry(scale * V_SIZE, scale * V_SIZE, scale * V_SIZE);
+                const mesh = new THREE.InstancedMesh(geo, mat, instData.length);
+                
+                const tempScale = new THREE.Vector3();
+                const tempPos = new THREE.Vector3();
+                const tempQuat = new THREE.Quaternion();
+                
+                for (let i = 0; i < instData.length; i++) {
+                    // If Scale > 1 (LOD), we might need to adjust position or scale matrix
+                    // But here we assume instData.matrix is already correct position-wise. 
+                    // For LOD, we are sub-sampling, so position is correct.
+                    mesh.setMatrixAt(i, instData[i].matrix);
+                    mesh.setColorAt(i, instData[i].color);
+                    
+                    // Only link data for HIGH RES (scale 1) for animation updates
+                    if (scale === 1.0) {
+                        instData[i].mesh = mesh;
+                        instData[i].instanceIndex = i;
+                    }
+                }
+                mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+                mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+                disposableMeshes.push(mesh);
+                return mesh;
+            }
+
+            // --- LOD Generation ---
+            // High Res (Level 0) - Contains everything including internals
+            const highResGroup = new THREE.Group();
+            
+            const m_core = createInstancedMesh(lists.core.surface, voxelMaterial);
+            const m_coreInt = createInstancedMesh(lists.core.internal, voxelMaterial);
+            const m_mantle = createInstancedMesh(lists.mantle.surface, voxelMaterial);
+            const m_mantleInt = createInstancedMesh(lists.mantle.internal, voxelMaterial);
+            const m_crust = createInstancedMesh(lists.crust.surface, voxelMaterial);
+            const m_crustInt = createInstancedMesh(lists.crust.internal, voxelMaterial);
+            
+            if(m_core) highResGroup.add(m_core);
+            if(m_coreInt) { m_coreInt.visible = false; highResGroup.add(m_coreInt); }
+            if(m_mantle) highResGroup.add(m_mantle);
+            if(m_mantleInt) { m_mantleInt.visible = false; highResGroup.add(m_mantleInt); }
+            if(m_crust) highResGroup.add(m_crust);
+            if(m_crustInt) { m_crustInt.visible = false; highResGroup.add(m_crustInt); }
+            
+            // Store references for visibility toggling (only affects High Res)
+            meshes.highRes = {
+                core: m_core, coreInternal: m_coreInt,
+                mantle: m_mantle, mantleInternal: m_mantleInt,
+                crust: m_crust, crustInternal: m_crustInt
+            };
+
+            // Low Res (Level 1) - Downsampled Surface only, No internals (optimization)
+            // Sampling stride: 2. Scale: 2.
+            const createLowResList = (srcList) => {
+                const res = [];
+                for(let i=0; i<srcList.length; i+=2) { // Simple decimation
+                     res.push(srcList[i]);
+                }
+                return res;
+            };
+            
+            const lowResGroup = new THREE.Group();
+            // Merge lists for low res to reduce draw calls? No, keep separate for simplicity/coloring
+            const low_core = createInstancedMesh(createLowResList(lists.core.surface), voxelMaterial, 1.5); // Slight overlap
+            const low_mantle = createInstancedMesh(createLowResList(lists.mantle.surface), voxelMaterial, 1.5);
+            const low_crust = createInstancedMesh(createLowResList(lists.crust.surface), voxelMaterial, 1.5);
+            
+            if(low_core) lowResGroup.add(low_core);
+            if(low_mantle) lowResGroup.add(low_mantle);
+            if(low_crust) lowResGroup.add(low_crust);
+
+            // Setup LOD Object
+            const lod = new THREE.LOD();
+            lod.addLevel(highResGroup, 0);
+            lod.addLevel(lowResGroup, 300); // Switch to Low Res at distance 300
+            
+            meshes.earthLOD = lod;
+            earthGroup.add(lod);
+
+            // Atmosphere & Sun (No LOD needed, transparency/billboard nature issues with LOD usually)
+            meshes.atmosphere = createInstancedMesh(lists.atmosphere, atmosphereMaterial);
+            if (meshes.atmosphere) earthGroup.add(meshes.atmosphere);
+            
+            meshes.sun = createInstancedMesh(lists.sun, sunMaterial);
+            if (meshes.sun) sunGroup.add(meshes.sun);
+
+            // Store combined data for animation loops
+            voxelData.core = [...lists.core.surface, ...lists.core.internal];
+            voxelData.mantle = [...lists.mantle.surface, ...lists.mantle.internal];
+            voxelData.crust = [...lists.crust.surface, ...lists.crust.internal];
+            voxelData.atmosphere = lists.atmosphere;
+            voxelData.sun = lists.sun;
+
+            // Set initial orbit position
+            earthGroup.position.set(CONFIG.SUN_DIST, 0, 0);
+            
+            const totalVoxels = voxelData.core.length + voxelData.mantle.length + voxelData.crust.length + voxelData.atmosphere.length + voxelData.sun.length;
+            const visibleVoxels = lists.core.surface.length + lists.mantle.surface.length + lists.crust.surface.length + lists.atmosphere.length + lists.sun.length;
+            
+            document.getElementById('voxel-count').innerText = totalVoxels.toLocaleString();
+            document.getElementById('loading').style.display = 'none';
+            
+            log(`GEN COMPLETE. TOTAL: ${totalVoxels}, VISIBLE SURFACE: ${visibleVoxels}`);
+            state.isGenerating = false;
+            
+            // Reset View
+            updateView();
+            updateVisibility();
+        }
+
+        // --- Dynamic Updates ---
+        function updateSimulation(baseDelta) {
+            if (state.isGenerating) return;
+
+            const delta = baseDelta * state.timeScale;
+            state.tick += delta;
+            const time = state.tick;
+
+            // Orbital Mechanics
+            // 1. Earth Orbit around Sun
+            const orbitSpeed = 0.005;
+            const angle = time * orbitSpeed;
+            earthGroup.position.x = Math.cos(angle) * CONFIG.SUN_DIST;
+            earthGroup.position.z = Math.sin(angle) * CONFIG.SUN_DIST;
+
+            // 2. Earth Rotation (Day/Night)
+            earthGroup.rotation.y = time * 0.02;
+
+            // 3. Atmosphere Circulation (Wind - relative to Earth)
+            if (meshes.atmosphere && state.showAtmosphere) {
+                // Rotate slightly faster than earth to simulate prevailing winds
+                meshes.atmosphere.rotation.y = time * 0.005; 
+                
+                const pulse = 0.3 + Math.sin(time * 0.5) * 0.05;
+                meshes.atmosphere.material.opacity = pulse;
+            }
+
+            // 4. Sun Pulse
+            if (meshes.sun) {
+                 sunLightSource.intensity = 2.8 + Math.sin(time * 2) * 0.2;
+                 // Ensure Sun tracks correctly if camera moves in weird ways (though it's at 0,0,0)
+            }
+
+            // 5. Mantle: Convection currents
+            // Only animate if High Res is visible (LOD level 0)
+            const isHighRes = meshes.earthLOD && meshes.earthLOD.getCurrentLevel() === 0;
+
+            if (isHighRes && state.showMantle && voxelData.mantle.length > 0) {
+                const modifiedMeshes = new Set();
+                const updateCount = Math.floor(Math.min(voxelData.mantle.length * 0.01, 500 * state.timeScale)); 
+                
+                for(let i=0; i<updateCount; i++) {
+                    const idx = Math.floor(Math.random() * voxelData.mantle.length);
+                    const v = voxelData.mantle[idx];
+                    // v.mesh is only assigned for High Res meshes
+                    if (!v.mesh) continue;
+
+                    const heat = Math.sin(time * 2 + v.dist) * 0.15;
+                    const c = v.origColor.clone();
+                    c.offsetHSL(0, 0, heat);
+                    
+                    v.mesh.setColorAt(v.instanceIndex, c);
+                    modifiedMeshes.add(v.mesh);
+                }
+                modifiedMeshes.forEach(m => m.instanceColor.needsUpdate = true);
+            }
+
+            // 6. Crust: Water/Ice Cycle
+            if (isHighRes && state.showCrust && voxelData.crust.length > 0) {
+                const modifiedMeshes = new Set();
+                const updateCount = Math.floor(Math.min(voxelData.crust.length * 0.005, 200 * state.timeScale));
+                const globalTempShift = Math.sin(time * 0.2); 
+
+                for(let i=0; i<updateCount; i++) {
+                    const idx = Math.floor(Math.random() * voxelData.crust.length);
+                    const v = voxelData.crust[idx];
+                    if (!v.mesh) continue;
+
+                    if (v.isWater) {
+                        const lat = Math.abs(v.y / (CONFIG.RADIUS * state.resScale));
+                        const localTemp = 1.0 - lat + (globalTempShift * 0.2);
+                        let newColor = v.origColor.clone();
+                        
+                        if (localTemp < 0.25) newColor.setHex(0xddeeff); // Freeze
+                        else newColor = v.origColor; // Melt
+                        
+                        v.mesh.setColorAt(v.instanceIndex, newColor);
+                        modifiedMeshes.add(v.mesh);
+                    }
+                }
+                modifiedMeshes.forEach(m => m.instanceColor.needsUpdate = true);
+            }
+
+            // 7. Core Pulse
+            if (meshes.highRes && meshes.highRes.core) {
+                coreLight.intensity = 2 + Math.sin(time * 3) * 0.5;
+            }
+            
+            // Update LOD
+            if (meshes.earthLOD) meshes.earthLOD.update(camera);
+
+            // 8. Flashlight for Slice View
+            if (state.sliceView) {
+                flashlight.position.copy(camera.position);
+                
+                // Update Clipping Plane Logic
+                // Plane Normal is (0, 0, -1). Equation: 0x + 0y -1z + w = 0.
+                // To pass through Earth Center (ex, ey, ez): -ez + w = 0 => w = ez.
+                crossSectionPlane.constant = earthGroup.position.z; 
+            }
+
+            // Update Controls Target based on View Mode
+            if (state.viewMode === 0) { // Earth
+                controls.target.lerp(earthGroup.position, 0.1);
+            } else if (state.viewMode === 1) { // Sun
+                controls.target.lerp(new THREE.Vector3(0,0,0), 0.1);
+            } else { // System
+                controls.target.lerp(new THREE.Vector3(CONFIG.SUN_DIST/2, 0, 0), 0.1);
+            }
+            
+            // UI Updates
+            if (Math.random() < 0.02) {
+                const t = 14.9 + Math.sin(time * 0.1) * 2;
+                document.getElementById('stat-temp').innerText = t.toFixed(1) + "°C";
+                
+                if (state.timeScale > 50) {
+                     document.getElementById('stat-tect').innerText = "ACCELERATED";
+                     document.getElementById('stat-tect').style.color = "#f84";
+                } else {
+                     document.getElementById('stat-tect').innerText = "STABLE";
+                     document.getElementById('stat-tect').style.color = "#fff";
+                }
+            }
+        }
+
+        function updateView() {
+            const btn = document.getElementById('view-mode');
+            if (state.viewMode === 0) {
+                btn.innerText = "VIEW: EARTH";
+                controls.minDistance = 40; // Prevent clipping into R=32 Earth
+                controls.maxDistance = 300;
+            } else if (state.viewMode === 1) {
+                btn.innerText = "VIEW: SUN";
+                controls.minDistance = 60;
+                controls.maxDistance = 500;
+            } else {
+                btn.innerText = "VIEW: SYSTEM";
+                controls.minDistance = 200;
+                controls.maxDistance = 3000;
+                // Zoom out for system view
+                if (camera.position.distanceTo(controls.target) < 600) {
+                     camera.position.set(0, 800, 800);
+                }
+            }
+        }
+
+        document.getElementById('view-mode').addEventListener('click', () => {
+            state.viewMode = (state.viewMode + 1) % 3;
+            updateView();
+        });
+
+        function updateVisibility() {
+            // Atmosphere
+            if (meshes.atmosphere) meshes.atmosphere.visible = state.showAtmosphere;
+            
+            // High Res Internal Visibility Logic
+            if (meshes.highRes) {
+                const h = meshes.highRes;
+                
+                if(h.crust) h.crust.visible = state.showCrust;
+                if(h.crustInternal) h.crustInternal.visible = state.showCrust && state.sliceView;
+                
+                if(h.mantle) h.mantle.visible = state.showMantle;
+                if(h.mantleInternal) h.mantleInternal.visible = state.showMantle && state.sliceView;
+                
+                if(h.core) h.core.visible = true;
+                if(h.coreInternal) h.coreInternal.visible = state.sliceView;
+            }
+            
+            // Note: Low Res LOD level doesn't support hiding individual layers (crust/mantle) 
+            // to save complexity, assuming when zoomed out you want to see the planet.
+            // But Slice View on Low Res might look weird. 
+            // Since Slice View requires being close typically, LOD will be High.
+            
+            // Update Materials with clipping planes
+            const activePlanes = state.sliceView ? [crossSectionPlane] : [];
+            
+            voxelMaterial.clippingPlanes = activePlanes;
+            atmosphereMaterial.clippingPlanes = activePlanes;
+            voxelMaterial.needsUpdate = true;
+            atmosphereMaterial.needsUpdate = true;
+            
+            // Ensure Sun is never clipped
+            sunMaterial.clippingPlanes = [];
+            sunMaterial.needsUpdate = true;
+        }
+
+        // --- Event Listeners ---
+
+        // Time Slider
+        document.getElementById('time-slider').addEventListener('input', (e) => {
+            state.timeScale = parseInt(e.target.value);
+            document.getElementById('time-val').innerText = state.timeScale + 'x';
+        });
+
+        // Resolution
+        async function setResolution(scale) {
+            if (scale < 0.5 || scale > 2) return;
+            state.resScale = scale;
+            document.getElementById('res-val').innerText = scale + 'x';
+            await generateWorld();
+        }
+        document.getElementById('res-up').addEventListener('click', () => setResolution(state.resScale * 2));
+        document.getElementById('res-down').addEventListener('click', () => setResolution(state.resScale / 2));
+
+        // Toggles
+        document.getElementById('toggle-atmo').addEventListener('click', (e) => {
+            state.showAtmosphere = !state.showAtmosphere;
+            updateVisibility();
+            e.target.classList.toggle('bg-blue-900/30');
+            e.target.classList.toggle('bg-gray-800');
+        });
+        document.getElementById('toggle-crust').addEventListener('click', (e) => {
+            state.showCrust = !state.showCrust;
+            updateVisibility();
+            e.target.classList.toggle('bg-green-900/30');
+            e.target.classList.toggle('bg-gray-800');
+        });
+        document.getElementById('toggle-mantle').addEventListener('click', (e) => {
+            state.showMantle = !state.showMantle;
+            updateVisibility();
+            e.target.classList.toggle('bg-red-900/30');
+            e.target.classList.toggle('bg-gray-800');
+        });
+        document.getElementById('slice-view').addEventListener('click', (e) => {
+            state.sliceView = !state.sliceView;
+            updateVisibility();
+            e.target.classList.toggle('bg-gray-800');
+            e.target.classList.toggle('bg-cyan-700');
+        });
+
+        // Info/Legend
+        const legendPanel = document.getElementById('legend-panel');
+        document.getElementById('toggle-info').addEventListener('click', () => {
+            legendPanel.style.display = 'block';
+        });
+        document.getElementById('close-legend').addEventListener('click', () => {
+            legendPanel.style.display = 'none';
+        });
+
+        // Config
+        const configPanel = document.getElementById('config-panel');
+        document.getElementById('toggle-config').addEventListener('click', () => {
+            // Pre-fill current values
+            document.getElementById('cfg-radius').value = CONFIG.RADIUS;
+            document.getElementById('cfg-size').value = CONFIG.VOXEL_SIZE;
+            document.getElementById('cfg-noise').value = CONFIG.NOISE_SCALE;
+            document.getElementById('cfg-water').value = CONFIG.WATER_LEVEL;
+            document.getElementById('cfg-atmo').value = CONFIG.ATMO_DENSITY;
+            configPanel.style.display = 'block';
+        });
+        document.getElementById('close-config').addEventListener('click', () => {
+            configPanel.style.display = 'none';
+        });
+
+        document.getElementById('apply-config').addEventListener('click', async () => {
+            CONFIG.RADIUS = parseInt(document.getElementById('cfg-radius').value);
+            CONFIG.VOXEL_SIZE = parseFloat(document.getElementById('cfg-size').value);
+            CONFIG.NOISE_SCALE = parseFloat(document.getElementById('cfg-noise').value);
+            CONFIG.WATER_LEVEL = parseFloat(document.getElementById('cfg-water').value);
+            CONFIG.ATMO_DENSITY = parseFloat(document.getElementById('cfg-atmo').value);
+            
+            configPanel.style.display = 'none';
+            log("CONFIG UPDATED. REGENERATING...");
+            await generateWorld();
+        });
+
+        // Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- Loop ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            controls.update();
+            updateSimulation(delta);
+            
+            renderer.render(scene, camera);
+        }
+
+        // Init
+        generateWorld();
+        animate();
+
+    </script>
+</body>
+</html>
